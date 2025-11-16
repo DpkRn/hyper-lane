@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useRef } from "react";
-import { assignChannelToLane, createDataChannel } from "../utils/lanes";
+import { assignChannelToLane, createDataChannel } from "../utils/lanes.js";
 
 const WebRTCContext = createContext();
 export const useWebRTC = () => useContext(WebRTCContext);

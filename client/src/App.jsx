@@ -1,5 +1,5 @@
-import { SocketProvider } from "./context/SocketProvider";
-import { WebRTCProvider } from "./context/WebRTCProvider";
+import { SocketProvider } from "./context/SocketProvider.jsx";
+import { WebRTCProvider } from "./context/WebRTCProvider.jsx";
 import Sender from "./components/Sender";
 import Receiver from "./components/Receiver";
 
