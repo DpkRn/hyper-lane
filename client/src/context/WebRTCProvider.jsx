@@ -1,43 +1,221 @@
-import React, { createContext, useContext, useRef } from "react";
-import { assignChannelToLane, createDataChannel } from "../utils/lanes.js";
+import { createContext, useContext, useEffect, useRef, useState } from "react";
+import { useSocket } from "./SocketProvider";
+import { initMetadataWorker, saveChunkMetadata } from "../services/metadataService";
+import { writeChunkToLane, mergeLanesToFinalFile, closeAllLanes, initLaneFiles } from "../utils/fileUtils";
 
-const WebRTCContext = createContext();
+const LANE_COUNT = 4;
+const CHUNK_SIZE = 64 * 1024; // 64KB per chunk
+
+const WebRTCContext = createContext(null);
 export const useWebRTC = () => useContext(WebRTCContext);
 
-export default function WebRTCProvider({ children }) {
+export function WebRTCProvider({ children }) {
+  const socket = useSocket();
+  
   const pc = useRef(null);
+  const lanes = useRef([]); // RTCDataChannels
+  const fileRef = useRef(null);
 
-  function createPeer() {
-    pc.current = new RTCPeerConnection({
-      iceServers: [{ urls: ["stun:stun1.l.google.com:19302"] }],
-    });
-  }
+  const [connected, setConnected] = useState(false);
+  const [sessionId, setSessionId] = useState(null);
+  const [mode, setMode] = useState(null); // "sender" | "receiver"
 
-  async function createOffer(laneCount, lanesRef) {
-    createPeer();
+  useEffect(() => {
+    initMetadataWorker();
+  }, []);
 
-    for (let i = 0; i < laneCount; i++) {
-      createDataChannel(pc.current, i, lanesRef.current);
+  // ─────────────────────────────────────────────────────────────
+  // 1️⃣ Start Negotiation (Called ONLY when Receiver clicks Download)
+  // ─────────────────────────────────────────────────────────────
+  async function startWebRTC(file, sid, role) {
+    setMode(role);
+    setSessionId(sid);
+
+    fileRef.current = file;
+    pc.current = createPeerConnection(sid);
+
+    if (role === "sender") {
+      createSenderLanes();
+      await createOffer(sid);
     }
 
-    const offer = await pc.current.createOffer();
-    await pc.current.setLocalDescription(offer);
-    return offer;
+    attachSocketListeners(sid);
   }
 
-  async function handleOffer(offer, laneCount, lanesRef) {
-    createPeer();
-    assignChannelToLane(pc.current, lanesRef.current);
+  // ─────────────────────────────────────────────────────────────
+  // Create RTCPeerConnection
+  // ─────────────────────────────────────────────────────────────
+  function createPeerConnection(sid) {
+    const config = {
+      iceServers: [
+        { urls: "stun:stun.l.google.com:19302" },
+      ]
+    };
+
+    const peer = new RTCPeerConnection(config);
+
+    peer.onicecandidate = (event) => {
+      if (event.candidate) {
+        socket.emit("ice-candidate", { sessionId: sid, candidate: event.candidate });
+      }
+    };
+
+    peer.onconnectionstatechange = () => {
+      console.log("RTC State →", peer.connectionState);
+
+      if (peer.connectionState === "connected") setConnected(true);
+      if (peer.connectionState === "disconnected") setConnected(false);
+    };
+
+    peer.ondatachannel = (event) => {
+      const channel = event.channel;
+      const index = Number(channel.label.split("-")[1]);
+
+      lanes.current[index] = channel;
+
+      setupReceiverLane(channel, index);
+    };
+
+    return peer;
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Sender: Create 4 DataChannels
+  // ─────────────────────────────────────────────────────────────
+  function createSenderLanes() {
+    for (let i = 0; i < LANE_COUNT; i++) {
+      const channel = pc.current.createDataChannel(`lane-${i}`, { ordered: true });
+      lanes.current[i] = channel;
+
+      setupSenderLane(channel, i);
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Create Offer → Send via Signaling
+  // ─────────────────────────────────────────────────────────────
+  async function createOffer(sid) {
+    const offer = await pc.current.createOffer();
+    await pc.current.setLocalDescription(offer);
+
+    socket.emit("offer", { sessionId: sid, offer });
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Accept Answer (Receiver sends it)
+  // ─────────────────────────────────────────────────────────────
+  async function handleAnswer(answer) {
+    await pc.current.setRemoteDescription(answer);
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Apply ICE Candidates
+  // ─────────────────────────────────────────────────────────────
+  async function addIceCandidate(candidate) {
+    if (pc.current) {
+      await pc.current.addIceCandidate(candidate);
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Receiver: Accept Offer and Respond with Answer
+  // ─────────────────────────────────────────────────────────────
+  async function handleOffer(offer, sid) {
+    setMode("receiver");
+    setSessionId(sid);
+
+    pc.current = createPeerConnection(sid);
 
     await pc.current.setRemoteDescription(offer);
 
     const answer = await pc.current.createAnswer();
     await pc.current.setLocalDescription(answer);
-    return answer;
+
+    socket.emit("answer", { sessionId: sid, answer });
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Sender Lane Logic (Sending Chunks)
+  // ─────────────────────────────────────────────────────────────
+  function setupSenderLane(channel, index) {
+    channel.onopen = () => {
+      console.log(`📤 Lane ${index} READY`);
+      sendLaneChunks(index);
+    };
+  }
+
+  async function sendLaneChunks(laneIndex) {
+    const file = fileRef.current;
+    const totalChunks = Math.ceil(file.size / (CHUNK_SIZE * LANE_COUNT));
+
+    let offset = laneIndex * CHUNK_SIZE;
+
+    while (offset < file.size) {
+      const chunk = file.slice(offset, offset + CHUNK_SIZE);
+      const buffer = await chunk.arrayBuffer();
+
+      lanes.current[laneIndex].send(buffer);
+      saveChunkMetadata(sessionId, laneIndex, offset / CHUNK_SIZE);
+
+      offset += CHUNK_SIZE * LANE_COUNT;
+
+      // WebRTC Backpressure Handling
+      if (lanes.current[laneIndex].bufferedAmount > 5 * CHUNK_SIZE) {
+        await new Promise((res) => {
+          lanes.current[laneIndex].onbufferedamountlow = () => res();
+        });
+      }
+    }
+
+    lanes.current[laneIndex].send("EOF");
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Receiver Lane Logic (Receiving Chunks)
+  // ─────────────────────────────────────────────────────────────
+  function setupReceiverLane(channel, index) {
+  channel.onopen = async () => {
+    if (index === 0) {
+      await initLaneFiles(LANE_COUNT, sessionId);
+      totalChunksReceived = 0;
+    }
+  };
+
+  channel.onmessage = async (event) => {
+    if (event.data === "EOF") {
+      completedLanes++;
+      if (completedLanes === LANE_COUNT) {
+        await closeAllLanes();
+        const fileHandle = await mergeLanesToFinalFile(sessionId, fileRef.current.name, fileRef.current.size);
+        console.log("🎉 File merged and saved:", fileHandle);
+      }
+      return;
+    }
+
+    const buffer = event.data;
+    const offset = nextWriteOffset[index];
+    nextWriteOffset[index] += CHUNK_SIZE * LANE_COUNT;
+
+    await writeChunkToLane(index, offset, buffer);
+    saveChunkMetadata(sessionId, index, offset / CHUNK_SIZE);
+
+    totalChunksReceived += buffer.byteLength;
+    onProgress(totalChunksReceived);
+  };
+}
+
+
+  // ─────────────────────────────────────────────────────────────
+  // Wire Socket Listeners
+  // ─────────────────────────────────────────────────────────────
+  function attachSocketListeners(sid) {
+    socket.on("offer", ({ offer }) => handleOffer(offer, sid));
+    socket.on("answer", ({ answer }) => handleAnswer(answer));
+    socket.on("ice-candidate", ({ candidate }) => addIceCandidate(candidate));
   }
 
   return (
-    <WebRTCContext.Provider value={{ pc, createOffer, handleOffer }}>
+    <WebRTCContext.Provider value={{ startWebRTC, connected }}>
       {children}
     </WebRTCContext.Provider>
   );

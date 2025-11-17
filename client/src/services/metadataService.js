@@ -1,40 +1,22 @@
-let metadataWorker;
+let worker;
 
 export function initMetadataWorker() {
-  metadataWorker = new Worker("/src/workers/metadata.worker.js");
+  worker = new Worker("/src/workers/metadata.worker.js");
 }
 
-export function recordChunk(sessionId, laneIndex, chunkIndex) {
-  metadataWorker.postMessage({
-    type: "chunk-received",
-    sessionId,
-    laneIndex,
-    chunkIndex
-  });
+export function saveChunkMetadata(sessionId, lane, chunkIndex) {
+  worker.postMessage({ type: "chunk", sessionId, lane, chunkIndex });
 }
 
-export function requestResumeState(sessionId, laneIndex) {
+export function requestResume(sessionId) {
   return new Promise((resolve) => {
-    const listener = (event) => {
-      if (event.data.type === "resume-state" && 
-          event.data.sessionId === sessionId && 
-          event.data.laneIndex === laneIndex) {
-        
-        metadataWorker.removeEventListener("message", listener);
-        resolve(event.data);
+    const handler = (e) => {
+      if (e.data.type === "resume-data") {
+        worker.removeEventListener("message", handler);
+        resolve(e.data);
       }
     };
-
-    metadataWorker.addEventListener("message", listener);
-
-    metadataWorker.postMessage({
-      type: "get-resume-state",
-      sessionId,
-      laneIndex
-    });
+    worker.addEventListener("message", handler);
+    worker.postMessage({ type: "resume-request", sessionId });
   });
-}
-
-export function flushMetadata() {
-  metadataWorker.postMessage({ type: "force-flush" });
 }

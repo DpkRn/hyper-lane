@@ -1,77 +1,38 @@
-importScripts("/src/utils/db.js"); // IMPORTANT: path may vary depending bundler
+importScripts("/src/utils/db.js");
 
-const CACHE = {}; 
-let lastFlush = Date.now();
-const BATCH_SIZE = 30;
-const FLUSH_INTERVAL = 500; // ms
+let buffer = [];
+const FLUSH_SIZE = 20;
 
-self.onmessage = async (event) => {
-  const { type, sessionId, laneIndex, chunkIndex } = event.data;
+self.onmessage = async ({ data }) => {
+  if (data.type === "chunk") {
+    buffer.push(data);
 
-  switch (type) {
+    if (buffer.length >= FLUSH_SIZE) {
+      await flush();
+    }
+  }
 
-    case "chunk-received":
-      trackChunk(sessionId, laneIndex, chunkIndex);
-      break;
-
-    case "get-resume-state":
-      const result = await getResumeState(sessionId, laneIndex);
-      self.postMessage({ type: "resume-state", sessionId, laneIndex, ...result });
-      break;
-
-    case "force-flush":
-      await flushToDB();
-      self.postMessage({ type: "flushed" });
-      break;
+  if (data.type === "resume-request") {
+    const result = await getResumeState(data.sessionId);
+    self.postMessage({ type: "resume-data", ...result });
   }
 };
 
-/** Cache chunks then flush in batches */
-function trackChunk(sessionId, laneIndex, chunkIndex) {
-  if (!CACHE[sessionId]) CACHE[sessionId] = {};
-  if (!CACHE[sessionId][laneIndex]) CACHE[sessionId][laneIndex] = [];
-
-  CACHE[sessionId][laneIndex].push(chunkIndex);
-
-  const shouldFlush =
-    CACHE[sessionId][laneIndex].length >= BATCH_SIZE ||
-    Date.now() - lastFlush > FLUSH_INTERVAL;
-
-  if (shouldFlush) flushToDB();
-}
-
-async function flushToDB() {
-  lastFlush = Date.now();
+async function flush() {
   const db = await getDB();
 
-  for (let sessionId in CACHE) {
-    for (let laneIndex in CACHE[sessionId]) {
-      const chunks = CACHE[sessionId][laneIndex];
-
-      for (let chunkIndex of chunks) {
-        // delete missing chunk entry if exists
-        await db.delete("chunks", [sessionId, Number(laneIndex), chunkIndex]);
-
-        // update lane metadata
-        const lane = await db.get("lanes", [sessionId, Number(laneIndex)]);
-        lane.receivedChunks++;
-        lane.nextChunkIndex = chunkIndex + 1;
-        await db.put("lanes", lane);
-      }
-
-      CACHE[sessionId][laneIndex] = [];
-    }
+  for (const entry of buffer) {
+    await db.put("chunks", entry);
   }
+
+  buffer = [];
 }
 
-async function getResumeState(sessionId, laneIndex) {
+async function getResumeState(sessionId) {
   const db = await getDB();
-  const lane = await db.get("lanes", [sessionId, laneIndex]);
-  const pending = (await db.getAllFromIndex("chunks", "byLane", [sessionId, laneIndex]))
-    .map(c => c.chunkIndex);
+  const all = await db.getAllFromIndex("chunks", "bySession", sessionId);
 
   return {
-    nextChunkIndex: lane.nextChunkIndex,
-    missingChunks: pending
+    receivedChunks: all.map(c => c.chunkIndex)
   };
 }
