@@ -25,6 +25,13 @@ io.on("connection", (socket) => {
     socket.to(sessionId).emit("answer", { answer, from: socket.id });
   });
 
+  // Forward file metadata from sender to receiver
+  socket.on("file-info", (data) => {
+    const { sessionId } = data;
+    if (!sessionId) return;
+    socket.to(sessionId).emit("file-info", data);
+  });
+
   socket.on("ice-candidate", ({ sessionId, candidate }) => {
     socket.to(sessionId).emit("ice-candidate", { candidate, from: socket.id });
   });
