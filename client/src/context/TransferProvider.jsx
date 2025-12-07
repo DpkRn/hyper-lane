@@ -9,7 +9,7 @@ export const useTransfer = () => useContext(TransferContext);
 
 export function TransferProvider({ children }) {
   const socket = useSocket();
-  const { startWebRTC, connected } = useWebRTC();
+  const { startWebRTC } = useWebRTC();
 
   // STATE
   const [status, setStatus] = useState("idle");
@@ -81,6 +81,9 @@ export function TransferProvider({ children }) {
 
     // ask sender to re-send resume metadata
     socket.emit("resume-request", { sessionId });
+
+    // tell sender to begin transfer immediately
+    socket.emit("start-transfer", { sessionId });
   }
 
   // ───────────────────────────────────────────────
@@ -179,11 +182,27 @@ export function TransferProvider({ children }) {
   }
 
   function startTransfer() {
-    if (!connected || !fileInfo || !sessionId) return;
+    if (!fileInfo || !sessionId) return;
 
     setStatus("transferring");
     startWebRTC(fileInfo, sessionId, "sender", updateTransferStats);
   }
+
+  // Receiver tells sender to begin sending when Download is clicked
+  useEffect(() => {
+    if (!socket.ready) return;
+
+    const handleStartTransfer = () => {
+      if (isSender) {
+        startTransfer();
+      }
+    };
+
+    socket.on("start-transfer", handleStartTransfer);
+    return () => {
+      socket.off("start-transfer", handleStartTransfer);
+    };
+  }, [socket.ready, isSender, startTransfer]);
 
   function pause() {
     setStatus("paused");

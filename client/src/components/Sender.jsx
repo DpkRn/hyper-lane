@@ -15,7 +15,6 @@ const Sender = () => {
     sessionId,
     status,
     startSender,
-    startTransfer,
     pause,
     resume,
     cancel
@@ -85,18 +84,11 @@ const Sender = () => {
             <div className="flex items-center p-4 rounded-lg border bg-amber-50">
               <Users className={`w-5 h-5 ${receiverJoined ? "text-green-500" : "text-amber-500"}`} />
               <span className="ml-3 font-medium">
-                {receiverJoined ? "Receiver connected!" : "Waiting for receiver..."}
+                {receiverJoined
+                  ? "Receiver connected. Transfer will start when they click Download."
+                  : "Waiting for receiver..."}
               </span>
             </div>
-
-            {receiverJoined && (
-              <button
-                onClick={startTransfer}
-                className="w-full py-4 bg-indigo-600 text-white rounded-xl font-semibold text-lg hover:bg-indigo-700"
-              >
-                Start Transfer
-              </button>
-            )}
           </div>
         )}
 

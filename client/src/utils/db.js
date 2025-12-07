@@ -1,11 +1,20 @@
 import { openDB } from "idb";
 
 export const getDB = () => {
-  return openDB("webrtc-multi-lane", 1, {
+  return openDB("webrtc-multi-lane", 2, {
     upgrade(db) {
+      // v1: sessions store
       if (!db.objectStoreNames.contains("sessions")) {
         const s = db.createObjectStore("sessions", { keyPath: "sessionId" });
         s.createIndex("fileId", "fileId");
+      }
+
+      // v2: chunks store for resume metadata
+      if (!db.objectStoreNames.contains("chunks")) {
+        const c = db.createObjectStore("chunks", {
+          keyPath: ["sessionId", "lane", "chunkIndex"],
+        });
+        c.createIndex("bySession", "sessionId");
       }
     },
   });

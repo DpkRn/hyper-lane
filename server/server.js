@@ -32,6 +32,12 @@ io.on("connection", (socket) => {
     socket.to(sessionId).emit("file-info", data);
   });
 
+  // Receiver requests sender to start transfer
+  socket.on("start-transfer", ({ sessionId }) => {
+    if (!sessionId) return;
+    socket.to(sessionId).emit("start-transfer", { sessionId });
+  });
+
   socket.on("ice-candidate", ({ sessionId, candidate }) => {
     socket.to(sessionId).emit("ice-candidate", { candidate, from: socket.id });
   });
