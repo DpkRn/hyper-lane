@@ -21,7 +21,7 @@ const Sender = () => {
     cancel
   } = useTransfer();
 
-  const shareLink = sessionId ? `${window.location.origin}?session=${sessionId}` : "";
+  const shareLink = sessionId ? `${window.location.origin}/receiver?session=${sessionId}` : "";
 
   const formatBytes = (bytes) => {
     if (!bytes) return "0 Bytes";
