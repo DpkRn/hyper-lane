@@ -1,6 +1,7 @@
-import React from "react";
+import React, { useState } from "react";
 import { Download, Check, FolderOpen, Pause, Play } from "lucide-react";
 import { useTransfer } from "../context/TransferProvider";
+import { setSaveDirectory } from "../utils/fileUtils";
 
 const Receiver = () => {
   const {
@@ -13,6 +14,26 @@ const Receiver = () => {
     pause,
     resume
   } = useTransfer();
+
+  const [hasDirectory, setHasDirectory] = useState(false);
+  const [directoryError, setDirectoryError] = useState(null);
+
+  async function handleChooseDirectory() {
+    try {
+      setDirectoryError(null);
+      if (!window.showDirectoryPicker) {
+        setDirectoryError("This browser does not support choosing a download folder.");
+        return;
+      }
+      const handle = await window.showDirectoryPicker();
+      setSaveDirectory(handle);
+      setHasDirectory(true);
+    } catch (err) {
+      if (err?.name === "AbortError") return; // user cancelled
+      setDirectoryError("Failed to access the selected folder.");
+      console.error("Failed to choose directory", err);
+    }
+  }
 
   const formatBytes = (bytes) => {
     if (!bytes) return "0 Bytes";
@@ -41,8 +62,27 @@ const Receiver = () => {
             </div>
 
             <button
+              type="button"
+              onClick={handleChooseDirectory}
+              className="w-full py-3 bg-gray-100 text-gray-800 rounded-xl font-medium hover:bg-gray-200 flex items-center justify-center gap-2 border border-dashed border-gray-300"
+            >
+              <FolderOpen className="w-5 h-5" />
+              {hasDirectory ? "Download folder selected" : "Choose download folder"}
+            </button>
+
+            {directoryError && (
+              <p className="text-sm text-red-600">{directoryError}</p>
+            )}
+
+            <button
+              type="button"
+              disabled={!hasDirectory}
               onClick={startDownload}
-              className="w-full py-4 bg-purple-600 text-white rounded-xl font-semibold hover:bg-purple-700 flex items-center justify-center gap-2"
+              className={`w-full py-4 rounded-xl font-semibold flex items-center justify-center gap-2 ${
+                hasDirectory
+                  ? "bg-purple-600 text-white hover:bg-purple-700"
+                  : "bg-purple-200 text-purple-500 cursor-not-allowed"
+              }`}
             >
               <Download className="w-5 h-5" />
               Download

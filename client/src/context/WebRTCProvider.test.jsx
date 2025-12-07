@@ -20,17 +20,19 @@ vi.mock('../services/metadataService', () => ({
   saveChunkMetadata: vi.fn(),
 }));
 
-const writeChunkToLane = vi.fn(() => Promise.resolve());
-const mergeLanesToFinalFile = vi.fn(() => Promise.resolve({}));
-const closeAllLanes = vi.fn(() => Promise.resolve());
-const initLaneFiles = vi.fn(() => Promise.resolve());
+vi.mock('../utils/fileUtils', () => {
+  const writeChunkToLane = vi.fn(() => Promise.resolve());
+  const mergeLanesToFinalFile = vi.fn(() => Promise.resolve({}));
+  const closeAllLanes = vi.fn(() => Promise.resolve());
+  const initLaneFiles = vi.fn(() => Promise.resolve());
 
-vi.mock('../utils/fileUtils', () => ({
-  writeChunkToLane,
-  mergeLanesToFinalFile,
-  closeAllLanes,
-  initLaneFiles,
-}));
+  return {
+    writeChunkToLane,
+    mergeLanesToFinalFile,
+    closeAllLanes,
+    initLaneFiles,
+  };
+});
 
 import { WebRTCProvider, useWebRTC } from './WebRTCProvider';
 
@@ -40,6 +42,9 @@ class MockDataChannel {
     this.onopen = null;
     this.onmessage = null;
   }
+
+  // send will be wired up externally in tests when needed
+  send() {}
 }
 
 class MockRTCPeerConnection {

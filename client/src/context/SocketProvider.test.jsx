@@ -1,5 +1,5 @@
 import React from 'react';
-import { render } from '@testing-library/react';
+import { render, waitFor } from '@testing-library/react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 const mockOn = vi.fn();
@@ -16,13 +16,16 @@ vi.mock('socket.io-client', () => ({
 
 import { SocketProvider, useSocket } from './SocketProvider';
 
-function TestComponent({ handler }) {
+let latestOn;
+let latestOff;
+
+function CaptureHooks() {
   const { on, off } = useSocket();
 
   React.useEffect(() => {
-    on('test-event', handler);
-    off('test-event', handler);
-  }, [on, off, handler]);
+    latestOn = on;
+    latestOff = off;
+  }, [on, off]);
 
   return null;
 }
@@ -38,14 +41,23 @@ describe('SocketProvider', () => {
     vi.restoreAllMocks();
   });
 
-  it("off removes a registered event listener", () => {
+  it("off removes a registered event listener", async () => {
     const handler = vi.fn();
 
     render(
       <SocketProvider>
-        <TestComponent handler={handler} />
+        <CaptureHooks />
       </SocketProvider>,
     );
+
+    await waitFor(() => {
+      expect(typeof latestOn).toBe('function');
+      expect(typeof latestOff).toBe('function');
+    });
+
+    // Call through the exposed wrappers
+    latestOn('test-event', handler);
+    latestOff('test-event', handler);
 
     expect(mockOn).toHaveBeenCalledWith('test-event', handler);
     expect(mockOff).toHaveBeenCalledWith('test-event', handler);
