@@ -1,9 +1,8 @@
+/* eslint-disable react-refresh/only-export-components */
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { useSocket } from "./SocketProvider";
 import { useWebRTC } from "./WebRTCProvider";
 import { requestResume } from "../services/metadataService";
-import { useLocation } from "react-router-dom";
-
 
 const TransferContext = createContext(null);
 export const useTransfer = () => useContext(TransferContext);
@@ -13,8 +12,11 @@ export function TransferProvider({ children }) {
   const { startWebRTC, connected } = useWebRTC();
 
   // STATE
-  const [status, setStatus] = useState("idle"); 
-  const [sessionId, setSessionId] = useState(null);
+  const [status, setStatus] = useState("idle");
+  const [sessionId, setSessionId] = useState(() => {
+    const params = new URLSearchParams(window.location.search);
+    return params.get("session");
+  });
   const [isSender, setIsSender] = useState(false);
   const [receiverJoined, setReceiverJoined] = useState(false);
   const [fileInfo, setFileInfo] = useState(null);
@@ -24,52 +26,58 @@ export function TransferProvider({ children }) {
   const [etaSeconds, setEtaSeconds] = useState(null);
 
   const lastBytesRef = useRef(0);
-  const lastUpdateRef = useRef(Date.now());
+  const lastUpdateRef = useRef(0);
   const totalBytesTransferred = useRef(0);
   const expectedSize = useRef(0);
 
-
+  // Detect receiver based on URL param and join room
   useEffect(() => {
-  const params = new URLSearchParams(window.location.search);
-  const sid = params.get("session");
+    if (!socket?.ready || !sessionId) return;
 
-  if (sid) {
-    // This device is receiver 
-    setSessionId(sid);
-    setIsReceiver(true);
-    socket.emit("join-room", { sessionId: sid });
-  }
-}, [socket.ready]);
+    socket.emit("join-room", { sessionId });
+  }, [socket.ready, sessionId]);
+
   // ───────────────────────────────────────────────
   // SEND FILE INFO WHEN RECEIVER JOINS
   // ───────────────────────────────────────────────
   useEffect(() => {
     if (!socket.ready) return;
 
-    socket.on("peer-joined", () => {
+    const handlePeerJoined = () => {
       setReceiverJoined(true);
 
       if (isSender && fileInfo) {
         socket.emit("file-info", { sessionId, ...fileInfo });
       }
-    });
+    };
 
-    socket.on("file-info", (data) => {
+    const handleFileInfo = (data) => {
       setFileInfo({
         name: data.name,
         type: data.type,
-        size: data.size
+        size: data.size,
       });
-    });
+    };
 
-  }, [socket.ready, fileInfo, isSender, sessionId]);
+    socket.on("peer-joined", handlePeerJoined);
+    socket.on("file-info", handleFileInfo);
+
+    return () => {
+      socket.off("peer-joined", handlePeerJoined);
+      socket.off("file-info", handleFileInfo);
+    };
+  }, [socket.ready, fileInfo, isSender, sessionId, socket]);
 
   // ───────────────────────────────────────────────
   // DOWNLOAD BUTTON → START NEGOTIATION
   // ───────────────────────────────────────────────
   function startDownload() {
+    if (!sessionId || !fileInfo) return;
+
+    resetTransferStats(fileInfo.size);
     setStatus("negotiating");
-    startWebRTC(null, sessionId, "receiver");
+
+    startWebRTC(null, sessionId, "receiver", updateTransferStats);
 
     // ask sender to re-send resume metadata
     socket.emit("resume-request", { sessionId });
@@ -79,31 +87,63 @@ export function TransferProvider({ children }) {
   // RESUME LOGIC
   // ───────────────────────────────────────────────
   useEffect(() => {
-    socket.on("resume-request", async () => {
+    if (!socket.ready) return;
+
+    const handler = async () => {
       if (!isSender) return;
 
       const state = await requestResume(sessionId);
       socket.emit("resume-response", { sessionId, lanes: state });
-    });
-  }, [isSender, sessionId]);
+    };
+
+    socket.on("resume-request", handler);
+    return () => {
+      socket.off("resume-request", handler);
+    };
+  }, [isSender, sessionId, socket]);
 
   // ───────────────────────────────────────────────
   // HANDLE RESUME RESPONSE FROM PEER
   // ───────────────────────────────────────────────
   useEffect(() => {
-    socket.on("resume-response", ({ lanes }) => {
+    if (!socket.ready) return;
+
+    const handler = ({ lanes }) => {
       console.log("📦 Resume data from sender:", lanes);
       // TODO: instruct WebRTC to resume lanes missing chunks
-    });
-  }, []);
+    };
+
+    socket.on("resume-response", handler);
+    return () => {
+      socket.off("resume-response", handler);
+    };
+  }, [socket]);
 
   // ───────────────────────────────────────────────
   // SPEED + ETA ESTIMATOR
   // ───────────────────────────────────────────────
+  function resetTransferStats(totalSize) {
+    totalBytesTransferred.current = 0;
+    lastBytesRef.current = 0;
+    lastUpdateRef.current = 0;
+    expectedSize.current = totalSize;
+    setProgress(0);
+    setSpeedMbps(0);
+    setEtaSeconds(null);
+  }
+
   function updateTransferStats(bytesReceived) {
     totalBytesTransferred.current += bytesReceived;
 
+    if (!expectedSize.current) return;
+
     const now = Date.now();
+
+    if (lastUpdateRef.current === 0) {
+      lastUpdateRef.current = now;
+      lastBytesRef.current = totalBytesTransferred.current;
+    }
+
     const timeDiff = now - lastUpdateRef.current;
 
     if (timeDiff >= 1000) {
@@ -113,7 +153,8 @@ export function TransferProvider({ children }) {
       setSpeedMbps(mbps.toFixed(2));
 
       const remaining = expectedSize.current - totalBytesTransferred.current;
-      setEtaSeconds(remaining / (diffBytes / timeDiff) / 1000);
+      const bytesPerMs = diffBytes / timeDiff || 0;
+      setEtaSeconds(bytesPerMs ? remaining / bytesPerMs / 1000 : null);
 
       lastBytesRef.current = totalBytesTransferred.current;
       lastUpdateRef.current = now;
@@ -131,16 +172,17 @@ export function TransferProvider({ children }) {
     setSessionId(sid);
     setIsSender(true);
 
-    expectedSize.current = file.size;
+    resetTransferStats(file.size);
     setFileInfo({ name: file.name, size: file.size, type: file.type });
 
     socket.emit("join-room", { sessionId: sid });
   }
 
   function startTransfer() {
-    if (!connected) return;
+    if (!connected || !fileInfo || !sessionId) return;
+
     setStatus("transferring");
-    startWebRTC(fileInfo, sessionId, "sender");
+    startWebRTC(fileInfo, sessionId, "sender", updateTransferStats);
   }
 
   function pause() {
@@ -158,21 +200,23 @@ export function TransferProvider({ children }) {
   }
 
   return (
-    <TransferContext.Provider value={{
-      status,
-      progress,
-      speedMbps,
-      etaSeconds,
-      sessionId,
-      fileInfo,
-      receiverJoined,
-      startSender,
-      startTransfer,
-      startDownload,
-      pause,
-      resume,
-      cancel
-    }}>
+    <TransferContext.Provider
+      value={{
+        status,
+        progress,
+        speedMbps,
+        etaSeconds,
+        sessionId,
+        fileInfo,
+        receiverJoined,
+        startSender,
+        startTransfer,
+        startDownload,
+        pause,
+        resume,
+        cancel,
+      }}
+    >
       {children}
     </TransferContext.Provider>
   );

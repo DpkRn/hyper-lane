@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 import io from "socket.io-client";
 
@@ -17,14 +18,19 @@ export function SocketProvider({ children }) {
       setReady(true);
     });
 
-    return () => socketRef.current.disconnect();
+    return () => {
+      if (socketRef.current) {
+        socketRef.current.disconnect();
+      }
+    };
   }, []);
 
-  const emit = (event, data) => socketRef.current.emit(event, data);
-  const on = (event, cb) => socketRef.current.on(event, cb);
+  const emit = (event, data) => socketRef.current?.emit(event, data);
+  const on = (event, cb) => socketRef.current?.on(event, cb);
+  const off = (event, cb) => socketRef.current?.off(event, cb);
 
   return (
-    <SocketContext.Provider value={{ ready, emit, on }}>
+    <SocketContext.Provider value={{ ready, emit, on, off }}>
       {children}
     </SocketContext.Provider>
   );

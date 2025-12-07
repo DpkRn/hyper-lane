@@ -1,4 +1,5 @@
-importScripts("/src/utils/db.js");
+/* eslint-env worker */
+import { getDB } from "../utils/db.js";
 
 let buffer = [];
 const FLUSH_SIZE = 20;
@@ -33,6 +34,6 @@ async function getResumeState(sessionId) {
   const all = await db.getAllFromIndex("chunks", "bySession", sessionId);
 
   return {
-    receivedChunks: all.map(c => c.chunkIndex)
+    receivedChunks: all.map((c) => c.chunkIndex),
   };
 }

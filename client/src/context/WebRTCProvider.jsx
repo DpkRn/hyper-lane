@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { useSocket } from "./SocketProvider";
 import { initMetadataWorker, saveChunkMetadata } from "../services/metadataService";
@@ -11,14 +12,18 @@ export const useWebRTC = () => useContext(WebRTCContext);
 
 export function WebRTCProvider({ children }) {
   const socket = useSocket();
-  
+
   const pc = useRef(null);
   const lanes = useRef([]); // RTCDataChannels
   const fileRef = useRef(null);
 
   const [connected, setConnected] = useState(false);
   const [sessionId, setSessionId] = useState(null);
-  const [mode, setMode] = useState(null); // "sender" | "receiver"
+
+  const totalBytesReceivedRef = useRef(0);
+  const completedLanesRef = useRef(0);
+  const nextWriteOffsetRef = useRef([]);
+  const progressCallbackRef = useRef(null);
 
   useEffect(() => {
     initMetadataWorker();
@@ -27,8 +32,8 @@ export function WebRTCProvider({ children }) {
   // ─────────────────────────────────────────────────────────────
   // 1️⃣ Start Negotiation (Called ONLY when Receiver clicks Download)
   // ─────────────────────────────────────────────────────────────
-  async function startWebRTC(file, sid, role) {
-    setMode(role);
+  async function startWebRTC(file, sid, role, onProgress) {
+    progressCallbackRef.current = onProgress || null;
     setSessionId(sid);
 
     fileRef.current = file;
@@ -47,9 +52,7 @@ export function WebRTCProvider({ children }) {
   // ─────────────────────────────────────────────────────────────
   function createPeerConnection(sid) {
     const config = {
-      iceServers: [
-        { urls: "stun:stun.l.google.com:19302" },
-      ]
+      iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
     };
 
     const peer = new RTCPeerConnection(config);
@@ -121,7 +124,6 @@ export function WebRTCProvider({ children }) {
   // Receiver: Accept Offer and Respond with Answer
   // ─────────────────────────────────────────────────────────────
   async function handleOffer(offer, sid) {
-    setMode("receiver");
     setSessionId(sid);
 
     pc.current = createPeerConnection(sid);
@@ -146,7 +148,6 @@ export function WebRTCProvider({ children }) {
 
   async function sendLaneChunks(laneIndex) {
     const file = fileRef.current;
-    const totalChunks = Math.ceil(file.size / (CHUNK_SIZE * LANE_COUNT));
 
     let offset = laneIndex * CHUNK_SIZE;
 
@@ -174,36 +175,50 @@ export function WebRTCProvider({ children }) {
   // Receiver Lane Logic (Receiving Chunks)
   // ─────────────────────────────────────────────────────────────
   function setupReceiverLane(channel, index) {
-  channel.onopen = async () => {
-    if (index === 0) {
-      await initLaneFiles(LANE_COUNT, sessionId);
-      totalChunksReceived = 0;
-    }
-  };
+    channel.onopen = async () => {
+      if (index === 0) {
+        await initLaneFiles(LANE_COUNT, sessionId);
+        totalBytesReceivedRef.current = 0;
+        completedLanesRef.current = 0;
 
-  channel.onmessage = async (event) => {
-    if (event.data === "EOF") {
-      completedLanes++;
-      if (completedLanes === LANE_COUNT) {
-        await closeAllLanes();
-        const fileHandle = await mergeLanesToFinalFile(sessionId, fileRef.current.name, fileRef.current.size);
-        console.log("🎉 File merged and saved:", fileHandle);
+        nextWriteOffsetRef.current = Array.from({ length: LANE_COUNT }, (_, laneIndex) =>
+          laneIndex * CHUNK_SIZE,
+        );
       }
-      return;
-    }
+    };
 
-    const buffer = event.data;
-    const offset = nextWriteOffset[index];
-    nextWriteOffset[index] += CHUNK_SIZE * LANE_COUNT;
+    channel.onmessage = async (event) => {
+      if (event.data === "EOF") {
+        completedLanesRef.current += 1;
+        if (completedLanesRef.current === LANE_COUNT) {
+          await closeAllLanes();
+          const fileHandle = await mergeLanesToFinalFile(
+            sessionId,
+            fileRef.current.name,
+            fileRef.current.size,
+          );
+          console.log("🎉 File merged and saved:", fileHandle);
+        }
+        return;
+      }
 
-    await writeChunkToLane(index, offset, buffer);
-    saveChunkMetadata(sessionId, index, offset / CHUNK_SIZE);
+      const buffer = event.data;
 
-    totalChunksReceived += buffer.byteLength;
-    onProgress(totalChunksReceived);
-  };
-}
+      const currentOffsets = nextWriteOffsetRef.current;
+      const offset = currentOffsets[index] ?? index * CHUNK_SIZE;
+      currentOffsets[index] = offset + CHUNK_SIZE * LANE_COUNT;
+      nextWriteOffsetRef.current = currentOffsets;
 
+      await writeChunkToLane(index, offset, buffer);
+      saveChunkMetadata(sessionId, index, offset / CHUNK_SIZE);
+
+      totalBytesReceivedRef.current += buffer.byteLength;
+
+      if (progressCallbackRef.current) {
+        progressCallbackRef.current(buffer.byteLength);
+      }
+    };
+  }
 
   // ─────────────────────────────────────────────────────────────
   // Wire Socket Listeners

@@ -4,7 +4,7 @@ export async function generateAESKey() {
   return crypto.subtle.generateKey(
     { name: "AES-GCM", length: 256 },
     true,
-    ["encrypt", "decrypt"]
+    ["encrypt", "decrypt"],
   );
 }
 
@@ -12,7 +12,7 @@ export async function encryptChunk(key, chunk, iv) {
   return crypto.subtle.encrypt(
     { name: "AES-GCM", iv },
     key,
-    chunk
+    chunk,
   );
 }
 
@@ -20,12 +20,11 @@ export async function decryptChunk(key, encrypted, iv) {
   return crypto.subtle.decrypt(
     { name: "AES-GCM", iv },
     key,
-    encrypted
+    encrypted,
   );
 }
 
-export async function createHasher() {
-  const hash = await crypto.subtle.digest("SHA-256", new Uint8Array());
+export function createHasher() {
   return {
     chunks: [],
     update(chunk) {
@@ -41,6 +40,6 @@ export async function createHasher() {
 
 export function hex(buffer) {
   return [...new Uint8Array(buffer)]
-    .map(x => x.toString(16).padStart(2, "0"))
+    .map((x) => x.toString(16).padStart(2, "0"))
     .join("");
 }
