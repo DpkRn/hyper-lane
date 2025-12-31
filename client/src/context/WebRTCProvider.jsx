@@ -52,7 +52,20 @@ export function WebRTCProvider({ children }) {
   // ─────────────────────────────────────────────────────────────
   function createPeerConnection(sid) {
     const config = {
-      iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+      iceServers: [
+        {
+          urls: "stun:stun.l.google.com:19302"
+        },
+        {
+          urls: [
+            "turn:relay1.expressturn.com:3478",
+            "turn:relay1.expressturn.com:3478?transport=tcp",
+            "turns:relay1.expressturn.com:5349"
+          ],
+          username: "000000002078142511",
+          credential: "VZ805jWsN6nlnUxR4wA0r6Uv73Q="
+        }
+      ]
     };
 
     const peer = new RTCPeerConnection(config);
@@ -99,8 +112,9 @@ export function WebRTCProvider({ children }) {
   // ─────────────────────────────────────────────────────────────
   async function createOffer(sid) {
     const offer = await pc.current.createOffer();
+    console.log("offer:",offer)
     await pc.current.setLocalDescription(offer);
-
+    console.log("offer done")
     socket.emit("offer", { sessionId: sid, offer });
   }
 
@@ -108,7 +122,9 @@ export function WebRTCProvider({ children }) {
   // Accept Answer (Receiver sends it)
   // ─────────────────────────────────────────────────────────────
   async function handleAnswer(answer) {
+    console.log("answer:",answer)
     await pc.current.setRemoteDescription(answer);
+    console.log("answer done")
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -148,8 +164,10 @@ export function WebRTCProvider({ children }) {
 
   async function sendLaneChunks(laneIndex) {
     const file = fileRef.current;
+    console.log("file:",file)
 
     let offset = laneIndex * CHUNK_SIZE;
+    console.log("offset:",offset)
 
     while (offset < file.size) {
       const chunk = file.slice(offset, offset + CHUNK_SIZE);
